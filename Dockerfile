@@ -9,10 +9,9 @@ WORKDIR /build
 
 RUN apk add --no-cache git ca-certificates
 
-COPY go.mod ./
-RUN go mod download
-
-COPY main.go .
+# التعديل هنا: بننسخ كل حاجة وبنخليه يعمل tidy عشان يولد go.sum
+COPY . .
+RUN go mod tidy
 
 RUN go build -ldflags="-s -w -extldflags '-static'" -o annie-api main.go
 
