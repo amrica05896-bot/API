@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/websocket/v2" // مكتبة الماسورة
+	"github.com/gofiber/websocket/v2"
 )
 
 func main() {
@@ -17,7 +17,7 @@ func main() {
 		DisableStartupMessage: true,
 	})
 
-	// 1. نقطة النهاية العادية (Download) مع دعم type (صوت أو فيديو)
+	// 1. Download
 	app.Get("/download", func(c *fiber.Ctx) error {
 		videoURL := c.Query("url")
 		if videoURL == "" {
@@ -33,12 +33,13 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
 
-		out, err := exec.CommandContext(ctx, "yt-dlp",
+		cmd := exec.CommandContext(ctx, "yt-dlp",
 			"--quiet", "--no-warnings",
 			"--extractor-args", "youtube:player_client=android",
-			"--cookies", "cookies.txt",
-			"-g", "-f", mediaFormat, videoURL).Output()
-
+			"-g", "-f", mediaFormat, videoURL)
+		
+		// استخدام CombinedOutput لكشف أي خطأ
+		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "فشل استخراج الرابط", "details": string(out)})
 		}
@@ -46,7 +47,7 @@ func main() {
 		return c.JSON(fiber.Map{"status": "success", "direct_url": strings.TrimSpace(string(out))})
 	})
 
-	// 2. نقطة النهاية لجلب جميع الجودات (Formats)
+	// 2. Formats
 	app.Get("/formats", func(c *fiber.Ctx) error {
 		videoURL := c.Query("url")
 		if videoURL == "" {
@@ -56,16 +57,16 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		// جلب البيانات بصيغة JSON كاملة
-		out, err := exec.CommandContext(ctx, "yt-dlp", "--quiet", "-J", "--cookies", "cookies.txt", videoURL).Output()
+		cmd := exec.CommandContext(ctx, "yt-dlp", "--quiet", "-J", "--extractor-args", "youtube:player_client=android", videoURL)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": "فشل جلب الجودات"})
+			return c.Status(500).JSON(fiber.Map{"error": "فشل جلب الجودات", "details": string(out)})
 		}
 
 		return c.Type("json").Send(out)
 	})
 
-	// 3. 🚀 الماسورة (WebSocket) - الاتصال المتواصل
+	// 3. 🚀 الماسورة (WebSocket)
 	app.Get("/ws", websocket.New(func(c *websocket.Conn) {
 		log.Println("✅ تم فتح الماسورة مع العميل")
 		for {
@@ -75,12 +76,10 @@ func main() {
 				break
 			}
 
-			// استخراج الرابط والنوع من رسالة العميل. نفترض أن الرسالة بالشكل: url|type
-			// مثال: https://youtube.com/watch?v=...|video
 			parts := strings.SplitN(string(msg), "|", 2)
 			videoURL := parts[0]
 			
-			mediaFormat := "bestaudio/best" // افتراضي: صوت
+			mediaFormat := "bestaudio/best"
 			if len(parts) > 1 && parts[1] == "video" {
 				mediaFormat = "best[ext=mp4]/best"
 			}
@@ -88,7 +87,8 @@ func main() {
 			startTime := time.Now()
 
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			out, err := exec.CommandContext(ctx, "yt-dlp", "-f", mediaFormat, "-g", "--cookies", "cookies.txt", videoURL).Output()
+			cmd := exec.CommandContext(ctx, "yt-dlp", "-f", mediaFormat, "-g", "--extractor-args", "youtube:player_client=android", videoURL)
+			out, err := cmd.CombinedOutput()
 			cancel()
 
 			response := fiber.Map{
@@ -97,6 +97,7 @@ func main() {
 			}
 			if err != nil {
 				response["error"] = "فشل سريع"
+				response["details"] = string(out)
 			}
 
 			c.WriteJSON(response)
