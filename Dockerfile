@@ -9,8 +9,8 @@ RUN go build -trimpath -ldflags="-s -w -extldflags '-static'" -o annie-api main.
 # STAGE 2: بيئة التشغيل بأحدث إصدار بايثون 3.14
 FROM python:3.14-alpine3.23
 
-# تسطيب أحدث نسخة من FFmpeg لضمان جودة الصوت
-RUN apk add --no-cache ffmpeg ca-certificates tzdata
+# تسطيب FFmpeg و Node.js (لحل شفرات يوتيوب) والاعتماديات الأساسية
+RUN apk add --no-cache ffmpeg ca-certificates tzdata nodejs
 
 # إعداد المستخدم والمجلدات
 RUN addgroup -S anniegroup && adduser -S annieuser -G anniegroup
@@ -28,7 +28,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # نسخ الملف التنفيذي من مرحلة البناء
 COPY --from=builder --chown=annieuser:anniegroup /build/annie-api /app/annie-api
 
-# --- الأمر اللي طلبت تنفيذه: نسخ الكوكيز مباشرة من الريبو للسيرفر ---
+# نسخ الكوكيز مباشرة من الريبو للسيرفر
 COPY --chown=annieuser:anniegroup cookies.txt /app/cookies.txt
 
 # تأمين الملفات
