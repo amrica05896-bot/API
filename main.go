@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"log"
+	"log/slog" // المعيار الحديث للسجلات في Go
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -13,62 +13,74 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/allegro/bigcache/v3"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/compress"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
-// تحديد سعة العمليات المتزامنة القصوى لحماية المعالج (10 أنوية)
 const maxConcurrentExtractions = 30
 
-func main() {
-	// إعداد الكاش بخصائص محسنة للتعامل مع المفاتيح المزدوجة (Tokens & VideoIDs)
-	cacheConfig := bigcache.DefaultConfig(20 * time.Minute)
-	cacheConfig.Shards = 2048
-	cacheConfig.MaxEntriesInWindow = 1000 * 60 * 20
-	cache, err := bigcache.New(context.Background(), cacheConfig)
-	if err != nil {
-		log.Fatalf("🔴 Critical Error: Failed to initialize BigCache: %v", err)
-	}
+var rdb *redis.Client
 
-	// Semaphore للتحكم في التزامن
+func init() {
+	// في 2026، الاتصال بـ Redis ضروري في السحابة لمنع فقدان البيانات
+	// Fly.io توفر رابط Redis في المتغير البيئي REDIS_URL
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		redisURL = "redis://localhost:6379/0" // للتطوير المحلي
+	}
+	
+	opt, err := redis.ParseURL(redisURL)
+	if err != nil {
+		slog.Error("🔴 Failed to parse Redis URL", "error", err)
+		os.Exit(1)
+	}
+	rdb = redis.NewClient(opt)
+}
+
+func main() {
+	// إعداد سجلات النظام الحديثة (JSON format للسيرفرات السحابية)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
+
 	extractionSemaphore := make(chan struct{}, maxConcurrentExtractions)
 
-	// إعدادات Fiber مع إضافة Timeouts لمنع استنزاف الموارد
 	app := fiber.New(fiber.Config{
-		Prefork:           false,
-		ReduceMemoryUsage: false,
-		ServerHeader:      "HighPerformance-API-2026",
-		BodyLimit:         10 * 1024 * 1024,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		DisableStartupMessage: true,
+		ServerHeader:          "Cloud-Native-API-2026",
+		BodyLimit:             10 * 1024 * 1024,
+		ReadTimeout:           15 * time.Second,
+		WriteTimeout:          0, // مفتوح للسماح بالبث المباشر المستمر
+		IdleTimeout:           60 * time.Second,
 	})
 
-	// وسطاء (Middlewares) لحماية الخادم وضغط البيانات
 	app.Use(recover.New())
 	app.Use(compress.New(compress.Config{Level: compress.LevelBestSpeed}))
 
 	app.Get("/download", func(c *fiber.Ctx) error {
 		videoURL := c.Query("url")
 		if videoURL == "" || !isValidYouTubeURL(videoURL) {
-			return c.Status(400).JSON(fiber.Map{"status": "fail", "error": "valid youtube url is required"})
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "fail", "error": "valid youtube url is required"})
 		}
 
-		mediaType := c.Query("type", "audio") // افتراضي: audio
+		mediaType := c.Query("type", "audio")
 		mediaFormat := "bestaudio/best"
 		if mediaType == "video" {
 			mediaFormat = "best[ext=mp4]/best"
 		}
 
-		// 1. فحص الكاش لمنع التكرار (Deduplication)
+		ctxBg := context.Background()
 		cacheKey := "vid:" + mediaType + ":" + videoURL
-		if cachedRawURL, err := cache.Get(cacheKey); err == nil {
-			// إذا كان الرابط مستخرجاً مسبقاً، نولد توكن جديد ونربطه بالرابط الجاهز
+
+		// 1. الفحص من Redis (Distributed Cache)
+		if cachedRawURL, err := rdb.Get(ctxBg, cacheKey).Result(); err == nil {
 			token := generateToken()
-			_ = cache.Set("tok:"+token, cachedRawURL)
+			// تخزين التوكن لمدة 6 ساعات
+			rdb.Set(ctxBg, "tok:"+token, cachedRawURL, 6*time.Hour)
+			
+			slog.Info("Served from cache", "url", videoURL, "token", token)
 			return c.JSON(fiber.Map{
 				"status":         "success",
 				"video_id":       videoURL,
@@ -77,14 +89,14 @@ func main() {
 			})
 		}
 
-		// 2. التحكم في التزامن: الدخول إلى الـ Semaphore (ينتظر إذا تجاوزنا maxConcurrentExtractions)
+		// 2. التحكم في التزامن
 		extractionSemaphore <- struct{}{}
-		defer func() { <-extractionSemaphore }() // تحرير الخانة عند انتهاء الدالة
+		defer func() { <-extractionSemaphore }()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		ctxCmd, cancel := context.WithTimeout(ctxBg, 25*time.Second)
 		defer cancel()
 
-		cmd := exec.CommandContext(ctx, "yt-dlp",
+		cmd := exec.CommandContext(ctxCmd, "yt-dlp",
 			"--quiet",
 			"--no-warnings",
 			"--no-check-certificates",
@@ -96,8 +108,8 @@ func main() {
 
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			log.Printf("🔴 Extraction Error for %s: %s\n", videoURL, string(out))
-			return c.Status(500).JSON(fiber.Map{
+			slog.Error("Extraction failed", "url", videoURL, "error", string(out))
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 				"status":  "error",
 				"message": "extraction failed or timed out",
 			})
@@ -105,20 +117,13 @@ func main() {
 
 		rawURL := strings.TrimSpace(string(out))
 		if rawURL == "" {
-			return c.Status(500).JSON(fiber.Map{"status": "error", "message": "empty response from extractor"})
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": "empty response"})
 		}
 
-		// 3. تخزين النتيجة في الكاش المزدوج
+		// 3. تخزين النتيجة في Redis
 		token := generateToken()
-		rawURLBytes := []byte(rawURL)
-		
-		// تخزين التوكن لاستخدامه في البث
-		if err := cache.Set("tok:"+token, rawURLBytes); err != nil {
-			return c.Status(500).JSON(fiber.Map{"status": "error", "message": "internal cache error"})
-		}
-		
-		// تخزين الرابط لمنع التكرار مستقبلاً (أفضل جهد Best-effort، نتجاهل الخطأ إن حدث)
-		_ = cache.Set(cacheKey, rawURLBytes)
+		rdb.Set(ctxBg, "tok:"+token, rawURL, 6*time.Hour)
+		rdb.Set(ctxBg, cacheKey, rawURL, 20*time.Minute) // تخزين الرابط الأصلي لمنع التكرار
 
 		return c.JSON(fiber.Map{
 			"status":         "success",
@@ -128,13 +133,37 @@ func main() {
 		})
 	})
 
+	// 🚀 التحديث الأهم: عمل Proxy بدلاً من Redirect لتخطي حظر IP
 	app.Get("/stream/:token", func(c *fiber.Ctx) error {
 		token := c.Params("token")
-		rawURL, err := cache.Get("tok:" + token)
+		rawURL, err := rdb.Get(context.Background(), "tok:"+token).Result()
+		
 		if err != nil {
-			return c.Status(404).SendString("Token expired or invalid")
+			slog.Warn("Invalid or expired token accessed", "token", token)
+			return c.Status(fiber.StatusNotFound).SendString("Token expired or invalid")
 		}
-		return c.Redirect(string(rawURL), 302)
+
+		// نقوم بجلب الفيديو من سيرفرنا وإرساله للمستخدم (Proxying)
+		req, err := http.NewRequestWithContext(c.Context(), http.MethodGet, rawURL, nil)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).SendString("Failed to create stream request")
+		}
+		
+		// تقليد متصفح حديث لتجنب حظر يوتيوب
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil || resp.StatusCode != 200 {
+			return c.Status(fiber.StatusBadGateway).SendString("Upstream video provider failed")
+		}
+
+		// نقل ترويسات الاستجابة (مثل حجم الملف ونوع المحتوى)
+		c.Set("Content-Type", resp.Header.Get("Content-Type"))
+		c.Set("Content-Length", resp.Header.Get("Content-Length"))
+		c.Set("Accept-Ranges", "bytes")
+
+		// البث المباشر (Streaming) بكفاءة عالية عبر Fiber
+		return c.SendStream(resp.Body)
 	})
 
 	app.Get("/health", func(c *fiber.Ctx) error {
@@ -142,27 +171,26 @@ func main() {
 			"status":         "online",
 			"cores":          runtime.NumCPU(),
 			"active_workers": len(extractionSemaphore),
-			"version":        "2026.4.18-max-optimized",
+			"redis_ping":     rdb.Ping(context.Background()).Err() == nil,
 		})
 	})
 
-	// 4. آلية الإغلاق الآمن (Graceful Shutdown)
 	go func() {
 		if err := app.Listen(":7860"); err != nil {
-			log.Panic(err)
+			slog.Error("Server failed", "error", err)
 		}
 	}()
 
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	<-c // انتظار إشارة الإغلاق
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	<-quit
 
-	log.Println("🛑 Gracefully shutting down...")
+	slog.Info("🛑 Gracefully shutting down...")
 	_ = app.Shutdown()
-	log.Println("Fiber was successful shutdown.")
+	_ = rdb.Close()
+	slog.Info("Shutdown complete.")
 }
 
-// دوال مساعدة
 func generateToken() string {
 	return "TX_" + strings.ReplaceAll(uuid.New().String(), "-", "")[:15]
 }
