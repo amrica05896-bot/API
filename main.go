@@ -35,7 +35,7 @@ func main() {
 
 		cmd := exec.CommandContext(ctx, "yt-dlp",
 			"--quiet", "--no-warnings", "--no-playlist", // لتسريع الاستخراج
-			"--js-runtimes", "node",                     // محرك فك التشفير
+			"--js-runtimes", "quickjs",                     // محرك فك التشفير
 			"--remote-components", "ejs:github",         // تحميل أحدث سكريبت فك تشفير
 			"--cookies", "cookies.txt",                  // إثبات إنك مش بوت
 			"-f", mediaFormat,
