@@ -34,9 +34,12 @@ func main() {
 		defer cancel()
 
 		cmd := exec.CommandContext(ctx, "yt-dlp",
-			"--quiet", "--no-warnings",
-			"--extractor-args", "youtube:player_client=android",
-			"-g", "-f", mediaFormat, videoURL)
+			"--quiet", "--no-warnings", "--no-playlist", // لتسريع الاستخراج
+			"--js-runtimes", "node",                     // محرك فك التشفير
+			"--remote-components", "ejs:github",         // تحميل أحدث سكريبت فك تشفير
+			"--cookies", "cookies.txt",                  // إثبات إنك مش بوت
+			"-f", mediaFormat,
+			"-g", videoURL)
 		
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -56,7 +59,13 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		cmd := exec.CommandContext(ctx, "yt-dlp", "--quiet", "-J", "--extractor-args", "youtube:player_client=android", videoURL)
+		cmd := exec.CommandContext(ctx, "yt-dlp",
+			"--quiet", "--no-warnings", "--no-playlist",
+			"--js-runtimes", "node",
+			"--remote-components", "ejs:github",
+			"--cookies", "cookies.txt",
+			"-J", videoURL)
+		
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "فشل جلب الجودات", "details": string(out)})
@@ -87,8 +96,15 @@ func main() {
 
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			
-			// 🚀 التعديل هنا: تم إضافة --quiet و --no-warnings لضمان نظافة الرابط
-			cmd := exec.CommandContext(ctx, "yt-dlp", "--quiet", "--no-warnings", "-f", mediaFormat, "-g", "--extractor-args", "youtube:player_client=android", videoURL)
+			// 🚀 استخراج طلقة عبر الماسورة
+			cmd := exec.CommandContext(ctx, "yt-dlp",
+				"--quiet", "--no-warnings", "--no-playlist",
+				"--js-runtimes", "node",
+				"--remote-components", "ejs:github",
+				"--cookies", "cookies.txt",
+				"-f", mediaFormat,
+				"-g", videoURL)
+			
 			out, err := cmd.CombinedOutput()
 			cancel()
 
