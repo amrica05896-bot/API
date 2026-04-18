@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"os"
 	"os/exec"
@@ -18,7 +17,7 @@ func main() {
 		DisableStartupMessage: true,
 	})
 
-	// 1. نقطة النهاية العادية (Download)
+	// 1. نقطة النهاية العادية (Download) مع دعم type (صوت أو فيديو)
 	app.Get("/download", func(c *fiber.Ctx) error {
 		videoURL := c.Query("url")
 		if videoURL == "" {
@@ -70,19 +69,26 @@ func main() {
 	app.Get("/ws", websocket.New(func(c *websocket.Conn) {
 		log.Println("✅ تم فتح الماسورة مع العميل")
 		for {
-			// قراءة الرسالة من تيرمكس (يجب أن ترسل الرابط كـ JSON أو نص)
 			_, msg, err := c.ReadMessage()
 			if err != nil {
 				log.Println("❌ انقطعت الماسورة:", err)
 				break
 			}
 
-			videoURL := string(msg)
+			// استخراج الرابط والنوع من رسالة العميل. نفترض أن الرسالة بالشكل: url|type
+			// مثال: https://youtube.com/watch?v=...|video
+			parts := strings.SplitN(string(msg), "|", 2)
+			videoURL := parts[0]
+			
+			mediaFormat := "bestaudio/best" // افتراضي: صوت
+			if len(parts) > 1 && parts[1] == "video" {
+				mediaFormat = "best[ext=mp4]/best"
+			}
+
 			startTime := time.Now()
 
-			// معالجة الرابط فوراً باستخدام الـ 10 كور
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			out, err := exec.CommandContext(ctx, "yt-dlp", "-g", "--cookies", "cookies.txt", videoURL).Output()
+			out, err := exec.CommandContext(ctx, "yt-dlp", "-f", mediaFormat, "-g", "--cookies", "cookies.txt", videoURL).Output()
 			cancel()
 
 			response := fiber.Map{
@@ -93,12 +99,13 @@ func main() {
 				response["error"] = "فشل سريع"
 			}
 
-			// إرسال الرد في نفس الماسورة المفتوحة
 			c.WriteJSON(response)
 		}
 	}))
 
 	port := os.Getenv("PORT")
-	if port == "" { port = "7860" }
+	if port == "" {
+		port = "7860"
+	}
 	log.Fatal(app.Listen(":" + port))
 }
