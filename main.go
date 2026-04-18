@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -25,7 +24,7 @@ func main() {
 
 	app := fiber.New(fiber.Config{
 		Prefork:           true, // تشغيل سيرفر لكل كور (10 سيرفرات متوازية)
-		ReduceMemoryUsage: false, // تعتيل تقليل الميموري لأن عندك 30 جيجا فمحتاجين سرعة مش توفير
+		ReduceMemoryUsage: false, // تعطيل تقليل الميموري لأن عندك 30 جيجا فمحتاجين سرعة مش توفير
 		ServerHeader:      "Annie-HighPerformance-2026",
 		BodyLimit:         10 * 1024 * 1024,
 		ReadTimeout:       10 * time.Second,
