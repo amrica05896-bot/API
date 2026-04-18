@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"os"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/websocket/v2" // مكتبة الماسورة
 )
 
 func main() {
@@ -16,78 +18,87 @@ func main() {
 		DisableStartupMessage: true,
 	})
 
-	// نقطة النهاية للحصول على الرابط المباشر
+	// 1. نقطة النهاية العادية (Download)
 	app.Get("/download", func(c *fiber.Ctx) error {
 		videoURL := c.Query("url")
 		if videoURL == "" {
 			return c.Status(400).JSON(fiber.Map{"error": "يجب إرسال رابط يوتيوب"})
 		}
 
-		// تحديد الجودة (فيديو أو صوت)
 		mediaType := c.Query("type", "audio")
 		mediaFormat := "bestaudio/best"
 		if mediaType == "video" {
 			mediaFormat = "best[ext=mp4]/best"
 		}
 
-		// تحديد وقت أقصى للعملية (20 ثانية) حتى لا يعلق السيرفر
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
 
-		// استخراج الرابط المباشر باستخدام yt-dlp
-		cmd := exec.CommandContext(ctx, "yt-dlp",
-			"--quiet",
-			"--no-warnings",
+		out, err := exec.CommandContext(ctx, "yt-dlp",
+			"--quiet", "--no-warnings",
 			"--extractor-args", "youtube:player_client=android",
-			"-g", // هذه الإضافة (-g) هي ما يجلب الرابط المباشر فقط
-			"-f", mediaFormat,
-			videoURL,
-		)
+			"--cookies", "cookies.txt",
+			"-g", "-f", mediaFormat, videoURL).Output()
 
-		out, err := cmd.CombinedOutput()
 		if err != nil {
-			return c.Status(500).JSON(fiber.Map{
-				"error":   "فشل استخراج الرابط",
-				"details": string(out),
-			})
+			return c.Status(500).JSON(fiber.Map{"error": "فشل استخراج الرابط", "details": string(out)})
 		}
 
-		// تنظيف الرابط المستخرج من المسافات
-		rawURL := strings.TrimSpace(string(out))
-
-		// إرجاع الرابط المباشر فوراً بدون توكن أو لف ودوران
-		return c.JSON(fiber.Map{
-			"status":     "success",
-			"direct_url": rawURL,
-		})
+		return c.JSON(fiber.Map{"status": "success", "direct_url": strings.TrimSpace(string(out))})
 	})
 
-	// نقطة نهاية إضافية (اختيارية): لو أردت أن يقوم السيرفر بتوجيهك فوراً للتحميل/التشغيل
-	app.Get("/play", func(c *fiber.Ctx) error {
+	// 2. نقطة النهاية لجلب جميع الجودات (Formats)
+	app.Get("/formats", func(c *fiber.Ctx) error {
 		videoURL := c.Query("url")
-		mediaType := c.Query("type", "audio")
-		mediaFormat := "bestaudio/best"
-		if mediaType == "video" {
-			mediaFormat = "best[ext=mp4]/best"
+		if videoURL == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "url مطلوب"})
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		out, err := exec.CommandContext(ctx, "yt-dlp", "--quiet", "--no-warnings", "--extractor-args", "youtube:player_client=android", "-g", "-f", mediaFormat, videoURL).Output()
+		// جلب البيانات بصيغة JSON كاملة
+		out, err := exec.CommandContext(ctx, "yt-dlp", "--quiet", "-J", "--cookies", "cookies.txt", videoURL).Output()
 		if err != nil {
-			return c.Status(500).SendString("فشل استخراج الرابط")
+			return c.Status(500).JSON(fiber.Map{"error": "فشل جلب الجودات"})
 		}
 
-		// إعادة توجيه المستخدم فوراً للرابط المباشر
-		return c.Redirect(strings.TrimSpace(string(out)), 302)
+		return c.Type("json").Send(out)
 	})
 
-	// تشغيل الخادم
+	// 3. 🚀 الماسورة (WebSocket) - الاتصال المتواصل
+	app.Get("/ws", websocket.New(func(c *websocket.Conn) {
+		log.Println("✅ تم فتح الماسورة مع العميل")
+		for {
+			// قراءة الرسالة من تيرمكس (يجب أن ترسل الرابط كـ JSON أو نص)
+			_, msg, err := c.ReadMessage()
+			if err != nil {
+				log.Println("❌ انقطعت الماسورة:", err)
+				break
+			}
+
+			videoURL := string(msg)
+			startTime := time.Now()
+
+			// معالجة الرابط فوراً باستخدام الـ 10 كور
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			out, err := exec.CommandContext(ctx, "yt-dlp", "-g", "--cookies", "cookies.txt", videoURL).Output()
+			cancel()
+
+			response := fiber.Map{
+				"direct_url": strings.TrimSpace(string(out)),
+				"time_taken": time.Since(startTime).String(),
+			}
+			if err != nil {
+				response["error"] = "فشل سريع"
+			}
+
+			// إرسال الرد في نفس الماسورة المفتوحة
+			c.WriteJSON(response)
+		}
+	}))
+
 	port := os.Getenv("PORT")
-	if port == "" {
-		port = "7860"
-	}
-	log.Printf("🚀 Server running on port %s...", port)
+	if port == "" { port = "7860" }
 	log.Fatal(app.Listen(":" + port))
 }
