@@ -1,0 +1,20 @@
+app = "api-tx-stq"
+primary_region = "iad"
+
+[http_service]
+  auto_start_machines = true
+  auto_stop_machines = false    # إيقاف الغفوة عشان السيرفر يفضل شغال 24/7
+  force_https = true
+  internal_port = 7860
+  min_machines_running = 1      # إجبار Fly.io إنه يسيب جهاز واحد شغال على الأقل دايماً
+  processes = ["app"]
+
+[http_service.concurrency]
+  type = "requests"
+  hard_limit = 10000            # رفع الحد الأقصى للطلبات المتزامنة عشان نستغل الـ 10 كور
+  soft_limit = 8000
+
+[[vm]]
+  cpu_kind = "performance"      # ضروري جداً للأرقام العالية دي بدل shared
+  cpus = 10
+  memory_mb = 30720             # 30 جيجا رام (30 * 1024)
