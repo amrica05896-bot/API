@@ -38,7 +38,6 @@ func main() {
 			"--extractor-args", "youtube:player_client=android",
 			"-g", "-f", mediaFormat, videoURL)
 		
-		// استخدام CombinedOutput لكشف أي خطأ
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "فشل استخراج الرابط", "details": string(out)})
@@ -87,7 +86,9 @@ func main() {
 			startTime := time.Now()
 
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			cmd := exec.CommandContext(ctx, "yt-dlp", "-f", mediaFormat, "-g", "--extractor-args", "youtube:player_client=android", videoURL)
+			
+			// 🚀 التعديل هنا: تم إضافة --quiet و --no-warnings لضمان نظافة الرابط
+			cmd := exec.CommandContext(ctx, "yt-dlp", "--quiet", "--no-warnings", "-f", mediaFormat, "-g", "--extractor-args", "youtube:player_client=android", videoURL)
 			out, err := cmd.CombinedOutput()
 			cancel()
 
