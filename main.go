@@ -34,10 +34,10 @@ func main() {
 		defer cancel()
 
 		cmd := exec.CommandContext(ctx, "yt-dlp",
-			"--quiet", "--no-warnings", "--no-playlist", // لتسريع الاستخراج
-			"--js-runtimes", "quickjs",                     // محرك فك التشفير
-			"--remote-components", "ejs:github",         // تحميل أحدث سكريبت فك تشفير
-			"--cookies", "cookies.txt",                  // إثبات إنك مش بوت
+			"--quiet", "--no-warnings", "--no-playlist", 
+			"--js-runtimes", "node",                     // استخدام محرك Node.js الأسرع في فك التشفير
+			"--remote-components", "ejs:github",         // هيستخدم النسخة اللي اتحملت في الدوكر
+			"--cookies", "cookies.txt",                  // إثبات البشرية لتخطي الحظر
 			"-f", mediaFormat,
 			"-g", videoURL)
 		
