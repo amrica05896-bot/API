@@ -11,13 +11,11 @@ RUN go build -trimpath -ldflags="-s -w -extldflags '-static'" -o annie-api main.
 FROM python:3.14-alpine3.23
 
 # 1. مكتبات السرعة الصاروخية
-# - quickjs: أسرع بـ 100 مرة في الإقلاع من nodejs لفك تشفير يوتيوب!
-# - aria2: أسرع محرك تحميل موازي في العالم (تحسباً لو هتحمل ميديا مستقبلاً)
-# - py3-brotli & py3-certifi: لفك ضغط طلبات الويب بسرعة فائقة
+# تم استبدال quickjs بـ nodejs لتسريع حل تحديات جافاسكريبت
 RUN apk add --no-cache \
     ffmpeg \
     aria2 \
-    quickjs \
+    nodejs \
     ca-certificates \
     tzdata \
     gcompat \
@@ -35,18 +33,20 @@ ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:/usr/bin:/usr/local/bin:$PATH"
 
-# 4. تثبيت yt-dlp وعمل Compile مسبق (Pre-compile) للكود
-# تحويل بايثون لـ Bytecode بيوفر وقت الـ Parsing في كل ريكويست بيتعمل!
+# 4. تثبيت yt-dlp وعمل Caching لسكريبت فك التشفير
+# السطر الأخير بيجبر الأداة تحمل السكريبت من جيتهاب أثناء البناء عشان السيرفر ميحتاجش يحمله تاني
 RUN pip install --no-cache-dir --upgrade pip wheel && \
     pip install --no-cache-dir "yt-dlp>=2026.04.10" && \
-    python3 -m compileall -q $VIRTUAL_ENV/lib/python3.14/site-packages/yt_dlp
+    python3 -m compileall -q $VIRTUAL_ENV/lib/python3.14/site-packages/yt_dlp && \
+    yt-dlp --remote-components ejs:github --version
 
 # 5. نسخ ملفات التطبيق والكوكيز
 COPY --from=builder --chown=annieuser:anniegroup /build/annie-api /app/annie-api
 COPY --chown=annieuser:anniegroup cookies.txt /app/cookies.txt
 
-# 6. تأمين الملفات مع إعطاء yt-dlp صلاحية تحديث الكوكيز (حل الإيرور 500)
-RUN chmod 500 /app/annie-api && \
+# 6. تأمين الملفات مع إعطاء yt-dlp صلاحية تحديث الكوكيز (حل الإيرور 500 نهائياً)
+RUN chown -R annieuser:anniegroup /app && \
+    chmod 500 /app/annie-api && \
     chmod 600 /app/cookies.txt
 
 # 7. إعدادات بيئية مخصصة للسرعة القصوى وتقليل استهلاك الرام
